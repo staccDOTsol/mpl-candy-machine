@@ -11,14 +11,17 @@ use mpl_token_metadata::{
     types::{Collection, DataV2, PrintSupply, RuleSetToggle, TokenStandard},
 };
 use solana_program::sysvar;
+use switchboard_solana::{AttestationProgramState, AttestationQueueAccountData, FunctionAccountData, FunctionRequestInitAndTrigger, SWITCHBOARD_ATTESTATION_PROGRAM_ID, Mint};
 
 use crate::{
     constants::{
         AUTHORITY_SEED, EMPTY_STR, HIDDEN_SECTION, MPL_TOKEN_AUTH_RULES_PROGRAM, NULL_STRING,
     },
     utils::*,
-    AccountVersion, CandyError, CandyMachine, ConfigLine,
+    AccountVersion, CandyError, CandyMachine, ConfigLine, RequestAccountData,
 };
+
+use solana_program::hash::hash;
 
 /// Accounts to mint an NFT.
 pub(crate) struct MintAccounts<'info> {
@@ -41,7 +44,6 @@ pub(crate) struct MintAccounts<'info> {
     pub spl_ata_program: Option<AccountInfo<'info>>,
     pub system_program: AccountInfo<'info>,
     pub sysvar_instructions: Option<AccountInfo<'info>>,
-    pub recent_slothashes: AccountInfo<'info>,
 }
 
 pub fn mint_v2<'info>(ctx: Context<'_, '_, '_, 'info, MintV2<'info>>) -> Result<()> {
@@ -63,7 +65,6 @@ pub fn mint_v2<'info>(ctx: Context<'_, '_, '_, 'info, MintV2<'info>>) -> Result<
         nft_mint: ctx.accounts.nft_mint.to_account_info(),
         nft_mint_authority: ctx.accounts.nft_mint_authority.to_account_info(),
         payer: ctx.accounts.payer.to_account_info(),
-        recent_slothashes: ctx.accounts.recent_slothashes.to_account_info(),
         system_program: ctx.accounts.system_program.to_account_info(),
         sysvar_instructions: Some(ctx.accounts.sysvar_instructions.to_account_info()),
         token: ctx
@@ -79,14 +80,63 @@ pub fn mint_v2<'info>(ctx: Context<'_, '_, '_, 'info, MintV2<'info>>) -> Result<
             .as_ref()
             .map(|token_record| token_record.to_account_info()),
     };
-
-    process_mint(
+    let bump = *ctx.bumps.get("authority_pda").unwrap();
+/*process_mint(
         &mut ctx.accounts.candy_machine,
         accounts,
+        &mut ctx.accounts.req.load_mut().unwrap(),
         ctx.bumps["authority_pda"],
-    )
-}
+    ) */
+    let mut req = ctx.accounts.req.load_init()?;
 
+    // https://docs.rs/switchboard-solana/latest/switchboard_solana/attestation_program/instructions/request_init_and_trigger/index.html
+    let request_init_ctx = FunctionRequestInitAndTrigger {
+        request: ctx.accounts.switchboard_request.clone(),
+        authority: ctx.accounts.authority.to_account_info(),
+        function: ctx.accounts.switchboard_function.to_account_info(),
+        function_authority: None,
+        escrow: ctx.accounts.switchboard_request_escrow.clone(),
+        mint: ctx.accounts.switchboard_mint.to_account_info(),
+        state: ctx.accounts.switchboard_state.to_account_info(),
+        attestation_queue: ctx.accounts.switchboard_attestation_queue.to_account_info(),
+        payer: ctx.accounts.payer.to_account_info(),
+        system_program: ctx.accounts.system_program.to_account_info(),
+        token_program: ctx.accounts.token_program.to_account_info(),
+        associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+    };
+    let params = format!("PID={},REQUEST_KEY={},CANDY_MACHINE={},SPL_ATA_PROGRAM={},AUTHORITY_PDA={},COLLECTION_DELEGATE_RECORD={},COLLECTION_MASTER_EDITION={},COLLECTION_METADATA={},COLLECTION_MINT={},COLLECTION_UPDATE_AUTHORITY={},NFT_OWNER={},NFT_MASTER_EDITION={},NFT_METADATA={},NFT_MINT={},NFT_MINT_AUTHORITY={},PAYER={},SYSTEM_PROGRAM={},SYSVAR_INSTRUCTIONS={},TOKEN={},TOKEN_METADATA_PROGRAM={},SPL_TOKEN_PROGRAM={},TOKEN_RECORD={},BUMP={}", crate::ID, ctx.accounts.req.key(), ctx.accounts.candy_machine.key(), accounts.spl_ata_program.unwrap().key(), accounts.authority_pda.key(), accounts.collection_delegate_record.key(), accounts.collection_master_edition.key(), accounts.collection_metadata.key(), accounts.collection_mint.key(), accounts.collection_update_authority.key(), accounts.nft_owner.key(), accounts.nft_master_edition.key(), accounts.nft_metadata.key(), accounts.nft_mint.key(), accounts.nft_mint_authority.key(), accounts.payer.key(), accounts.system_program.key(), accounts.sysvar_instructions.unwrap().key(), accounts.token.unwrap().key(), accounts.token_metadata_program.key(), accounts.spl_token_program.key(), accounts.token_record.unwrap().key(), bump);
+    request_init_ctx.invoke_signed(
+        ctx.accounts.switchboard.clone(),
+        // bounty - optional fee to reward oracles for priority processing
+        // default: 0 lamports
+        None,
+        // slots_until_expiration - optional max number of slots the request can be processed in
+        // default: 2250 slots, ~ 15 min at 400 ms/slot
+        // minimum: 150 slots, ~ 1 min at 400 ms/slot
+        None,
+        // max_container_params_len - the length of the vec containing the container params
+        // default: 256 bytes
+        Some(512),
+        // container_params - the container params
+        // default: empty vec
+        Some(params.into()),
+        // garbage_collection_slot - the slot when the request can be closed by anyone and is considered dead
+        // default: None, only authority can close the request
+        None,
+        // valid_after_slot - schedule a request to execute in N slots
+        // default: 0 slots, valid immediately for oracles to process
+        None,
+        // signer seeds
+        &[],
+    )?;
+
+    req.bump = *ctx.bumps.get("req").unwrap();
+    req.pubkey_hash = ctx.accounts.authority_pda.key().to_bytes();
+    req.request_timestamp = Clock::get()?.unix_timestamp;
+    req.switchboard_request = ctx.accounts.switchboard_request.key();
+
+    Ok(())
+}
 /// Mint a new NFT.
 ///
 /// The index minted depends on the configuration of the candy machine: it could be
@@ -95,6 +145,7 @@ pub fn mint_v2<'info>(ctx: Context<'_, '_, '_, 'info, MintV2<'info>>) -> Result<
 pub(crate) fn process_mint(
     candy_machine: &mut Box<Account<'_, CandyMachine>>,
     accounts: MintAccounts,
+    req: &mut RequestAccountData,
     bump: u8,
 ) -> Result<()> {
     if !accounts.nft_metadata.data_is_empty() {
@@ -130,20 +181,29 @@ pub(crate) fn process_mint(
         return err!(CandyError::IncorrectCollectionAuthority);
     }
 
-    // (2) selecting an item to mint
+    // (2) selecting an item to mint // and now; magick
+    let pubkey = accounts.authority_pda.key();
+    if req.reveal_timestamp > 0 {
+        return Err(error!(CandyError::RequestAlreadyRevealed));
+    }
 
-    let recent_slothashes = &accounts.recent_slothashes;
-    let data = recent_slothashes.data.borrow();
-    let most_recent = array_ref![data, 12, 8];
+    let seed = req.seed.to_le_bytes();
+    let blockhash = req.blockhash;
 
-    let clock = Clock::get()?;
-    // seed for the random number is a combination of the slot_hash - timestamp
-    let seed = u64::from_le_bytes(*most_recent).saturating_sub(clock.unix_timestamp as u64);
+    if hash(&pubkey.to_bytes()).to_bytes() != req.pubkey_hash {
+        return Err(error!(CandyError::KeyVerifyFailed));
+    }
+    let randomness = hash(&[pubkey.to_bytes().to_vec(), blockhash.to_vec(), seed.to_vec()].concat()).to_bytes();
+    req.result = randomness;
+    msg!("Randomness-: {:?}", randomness);
+    req.reveal_timestamp = Clock::get()?.unix_timestamp;
 
-    let remainder: usize = seed
+    let remainder: usize = randomness
+        .iter()
+        .fold(0u64, |acc, x| acc + *x as u64)
         .checked_rem(candy_machine.data.items_available - candy_machine.items_redeemed)
         .ok_or(CandyError::NumericalOverflowError)? as usize;
-
+    
     let config_line = get_config_line(candy_machine, remainder, candy_machine.items_redeemed)?;
 
     candy_machine.items_redeemed = candy_machine
@@ -151,7 +211,7 @@ pub(crate) fn process_mint(
         .checked_add(1)
         .ok_or(CandyError::NumericalOverflowError)?;
     // release the data borrow
-    drop(data);
+    drop(req);
 
     // (3) minting
 
@@ -614,12 +674,6 @@ pub struct MintV2<'info> {
     #[account(address = sysvar::instructions::id())]
     sysvar_instructions: UncheckedAccount<'info>,
 
-    /// SlotHashes sysvar cluster data.
-    ///
-    /// CHECK: account constraints checked in account trait
-    #[account(address = sysvar::slot_hashes::id())]
-    recent_slothashes: UncheckedAccount<'info>,
-
     /// Token Authorization Rules program.
     ///
     /// CHECK: account checked in CPI
@@ -631,4 +685,46 @@ pub struct MintV2<'info> {
     /// CHECK: account constraints checked in account trait
     #[account(owner = MPL_TOKEN_AUTH_RULES_PROGRAM)]
     authorization_rules: Option<UncheckedAccount<'info>>,
+
+    #[account(
+        init,
+        space = 8 + std::mem::size_of::<RequestAccountData>(),
+        seeds = [&authority_pda.key().as_ref()],
+        payer = payer,
+        bump,
+    )]
+    pub req: AccountLoader<'info, RequestAccountData>,
+
+    /// CHECK:
+    pub authority: AccountInfo<'info>,
+
+    /// CHECK: Switchboard attestation program
+    #[account(executable, address = SWITCHBOARD_ATTESTATION_PROGRAM_ID)]
+    pub switchboard: AccountInfo<'info>,
+
+    pub switchboard_state: AccountLoader<'info, AttestationProgramState>,
+    pub switchboard_attestation_queue: AccountLoader<'info, AttestationQueueAccountData>,
+    #[account(mut)]
+    pub switchboard_function: AccountLoader<'info, FunctionAccountData>,
+    /// CHECK: validated by Switchboard CPI
+    #[account(
+        mut,
+        signer,
+        owner = system_program.key(),
+        constraint = switchboard_request.lamports() == 0
+      )]
+    pub switchboard_request: AccountInfo<'info>,
+    /// CHECK:
+    #[account(
+        mut,
+        owner = system_program.key(),
+        constraint = switchboard_request_escrow.lamports() == 0
+      )]
+    pub switchboard_request_escrow: AccountInfo<'info>,
+
+    // TOKEN ACCOUNTS
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
+    pub switchboard_mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>
 }

@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use solana_program::sysvar;
 
 use super::mint_v2::{process_mint, MintAccounts};
-use crate::{constants::AUTHORITY_SEED, utils::*, AccountVersion, CandyError, CandyMachine};
+use crate::{constants::AUTHORITY_SEED, utils::*, AccountVersion, CandyError, CandyMachine, RequestAccountData};
 
 pub fn mint<'info>(ctx: Context<'_, '_, '_, 'info, Mint<'info>>) -> Result<()> {
     msg!("(Deprecated as of 1.0.0) Use MintV2 instead");
@@ -25,7 +25,6 @@ pub fn mint<'info>(ctx: Context<'_, '_, '_, 'info, Mint<'info>>) -> Result<()> {
         nft_mint: ctx.accounts.nft_mint.to_account_info(),
         nft_mint_authority: ctx.accounts.nft_mint_authority.to_account_info(),
         payer: ctx.accounts.payer.to_account_info(),
-        recent_slothashes: ctx.accounts.recent_slothashes.to_account_info(),
         system_program: ctx.accounts.system_program.to_account_info(),
         sysvar_instructions: None,
         token: None,
@@ -37,6 +36,7 @@ pub fn mint<'info>(ctx: Context<'_, '_, '_, 'info, Mint<'info>>) -> Result<()> {
     process_mint(
         &mut ctx.accounts.candy_machine,
         accounts,
+        &mut ctx.accounts.req.load_mut().unwrap(),
         ctx.bumps["authority_pda"],
     )
 }
@@ -123,9 +123,6 @@ pub struct Mint<'info> {
     /// System program.
     system_program: Program<'info, System>,
 
-    /// SlotHashes sysvar cluster data.
-    ///
-    /// CHECK: account constraints checked in account trait
-    #[account(address = sysvar::slot_hashes::id())]
-    recent_slothashes: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub req: AccountLoader<'info, RequestAccountData>,
 }

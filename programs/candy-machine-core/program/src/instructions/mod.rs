@@ -10,6 +10,7 @@ pub mod set_mint_authority;
 pub mod set_token_standard;
 pub mod update;
 pub mod withdraw;
+pub mod seed;
 
 pub use add_config_lines::*;
 pub use initialize::*;
@@ -23,3 +24,4 @@ pub use set_mint_authority::*;
 pub use set_token_standard::*;
 pub use update::*;
 pub use withdraw::*;
+pub use seed::*;
