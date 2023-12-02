@@ -9,6 +9,8 @@ pub use unwrap::*;
 pub use update::*;
 pub use withdraw::*;
 pub use wrap::*;
+pub use request::*;
+pub use seed::*;
 
 use crate::state::CandyGuard;
 
@@ -21,6 +23,8 @@ pub mod unwrap;
 pub mod update;
 pub mod withdraw;
 pub mod wrap;
+pub mod request;
+pub mod seed;
 
 /// Accounts to mint an NFT.
 pub(crate) struct MintAccounts<'b, 'c, 'info> {
@@ -46,10 +50,20 @@ pub(crate) struct MintAccounts<'b, 'c, 'info> {
     pub(crate) spl_ata_program: Option<AccountInfo<'info>>,
     pub(crate) system_program: AccountInfo<'info>,
     pub(crate) sysvar_instructions: AccountInfo<'info>,
-    pub(crate) recent_slothashes: AccountInfo<'info>,
     pub(crate) remaining: &'c [AccountInfo<'info>],
     pub(crate) authorization_rules_program: Option<AccountInfo<'info>>,
     pub(crate) authorization_rules: Option<AccountInfo<'info>>,
+    pub(crate) req: AccountInfo<'info>,
+    pub(crate) switchboard: AccountInfo<'info>,
+    pub(crate) switchboard_state: AccountInfo<'info>,
+    pub(crate) switchboard_attestation_queue: AccountInfo<'info>,
+    pub(crate) switchboard_function: AccountInfo<'info>,
+    pub(crate) switchboard_request: AccountInfo<'info>,
+    pub(crate) switchboard_request_escrow: AccountInfo<'info>,
+    pub(crate) switchboard_mint: AccountInfo<'info>,
+    pub(crate) authority: AccountInfo<'info>,
+    pub(crate) token_program: AccountInfo<'info>,
+    pub(crate) associated_token_program: AccountInfo<'info>,
 }
 
 #[derive(Debug, Clone)]

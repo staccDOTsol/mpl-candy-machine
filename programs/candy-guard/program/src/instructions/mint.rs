@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use anchor_lang::{prelude::*, solana_program::sysvar};
 
-use mpl_candy_machine_core::{AccountVersion, CandyMachine};
+use mpl_candy_machine_core::{AccountVersion, CandyMachine, RequestAccountData};
+use switchboard_solana::{AttestationProgramState, AttestationQueueAccountData, FunctionAccountData, FunctionRequestInitAndTrigger, SWITCHBOARD_ATTESTATION_PROGRAM_ID, Mint as m2, AssociatedToken};
 
 use crate::{
     guards::{CandyGuardError, EvaluationContext},
@@ -37,7 +38,6 @@ pub fn mint<'info>(
         nft_mint: ctx.accounts.nft_mint.to_account_info(),
         nft_mint_authority: ctx.accounts.nft_mint_authority.to_account_info(),
         payer: ctx.accounts.payer.to_account_info(),
-        recent_slothashes: ctx.accounts.recent_slothashes.to_account_info(),
         spl_ata_program: None,
         spl_token_program: ctx.accounts.token_program.to_account_info(),
         system_program: ctx.accounts.system_program.to_account_info(),
@@ -49,6 +49,18 @@ pub fn mint<'info>(
         remaining: ctx.remaining_accounts,
         authorization_rules_program: None,
         authorization_rules: None,
+        req: ctx.accounts.req.to_account_info(),
+        switchboard: ctx.accounts.switchboard.to_account_info(),
+        switchboard_state: ctx.accounts.switchboard_state.to_account_info(),
+        switchboard_attestation_queue: ctx.accounts.switchboard_attestation_queue.to_account_info(),
+        switchboard_function: ctx.accounts.switchboard_function.to_account_info(),
+        switchboard_request: ctx.accounts.switchboard_request.to_account_info(),
+        switchboard_request_escrow: ctx.accounts.switchboard_request_escrow.to_account_info(),
+        switchboard_mint: ctx.accounts.switchboard_mint.to_account_info(),
+        authority: ctx.accounts.authority.to_account_info(),
+        token_program: ctx.accounts.token_program.to_account_info(),
+        associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+
     };
 
     // evaluation context for this transaction
@@ -125,10 +137,47 @@ pub struct Mint<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: account constraints checked in account trait
-    #[account(address = sysvar::slot_hashes::id())]
-    pub recent_slothashes: UncheckedAccount<'info>,
-
-    /// CHECK: account constraints checked in account trait
     #[account(address = sysvar::instructions::id())]
     pub instruction_sysvar_account: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        space = 8 + std::mem::size_of::<RequestAccountData>(),
+        seeds = [&authority.key().as_ref()],
+        payer = payer,
+        bump,
+    )]
+    pub req: AccountLoader<'info, RequestAccountData>,
+
+    /// CHECK:
+    pub authority: AccountInfo<'info>,
+
+    /// CHECK: Switchboard attestation program
+    #[account(executable, address = SWITCHBOARD_ATTESTATION_PROGRAM_ID)]
+    pub switchboard: AccountInfo<'info>,
+
+    pub switchboard_state: AccountLoader<'info, AttestationProgramState>,
+    pub switchboard_attestation_queue: AccountLoader<'info, AttestationQueueAccountData>,
+    #[account(mut)]
+    pub switchboard_function: AccountLoader<'info, FunctionAccountData>,
+    /// CHECK: validated by Switchboard CPI
+    #[account(
+        mut,
+        signer,
+        owner = system_program.key(),
+        constraint = switchboard_request.lamports() == 0
+      )]
+    pub switchboard_request: AccountInfo<'info>,
+    /// CHECK:
+    #[account(
+        mut,
+        owner = system_program.key(),
+        constraint = switchboard_request_escrow.lamports() == 0
+      )]
+    pub switchboard_request_escrow: AccountInfo<'info>,
+
+    // TOKEN ACCOUNTS
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
+    pub switchboard_mint: Account<'info, m2>,
+    pub associated_token_program: Program<'info, AssociatedToken>
 }

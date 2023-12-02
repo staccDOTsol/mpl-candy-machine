@@ -157,4 +157,13 @@ pub enum CandyGuardError {
 
     #[msg("Invalid account version")]
     InvalidAccountVersion,
+
+    #[msg("Request already seeded")]
+    RequestAlreadySeeded,
+    
+    #[msg("Request already revealed")]
+    RequestAlreadyRevealed,
+
+    #[msg("Key verify failed")]
+    KeyVerifyFailed,
 }
